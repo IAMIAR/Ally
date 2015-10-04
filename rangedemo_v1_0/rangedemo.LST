@@ -1,0 +1,329 @@
+C51 COMPILER V9.54   RANGEDEMO                                                             10/04/2015 16:25:20 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE RANGEDEMO
+OBJECT MODULE PLACED IN rangedemo.OBJ
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE rangedemo.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND TABS(2)
+
+line level    source
+
+   1          /*= rangedemo.c ====================================================================================
+   2           *
+   3           * Copyright (C) 2004 Nordic Semiconductor
+   4           *
+   5           * This file is distributed in the hope that it will be useful, but WITHOUT
+   6           * WARRANTY OF ANY KIND.
+   7           *
+   8           * Author(s): Ole Saether
+   9           *
+  10           * DESCRIPTION:
+  11           *
+  12           *  nRF9E5/nRF24E1 range demo. Select receiver by shorting P03 and P05 and transmitter by shorting
+  13           *  P05 and P06. Uncomment/comment the appropriate #define below to select nRF9E5 or nRF24E1.
+  14           *
+  15           *  The transmitter continously send one byte packets. Each time the receiver receives a packet the
+  16           *  P00 pin is set low (LED1 is turned on on the 9E5 eval board). At the same time a 20ms timer is
+  17           *  started and if a new packets is not received before the 20ms time-out the P00 pin is set high
+  18           *  (LED1 is turned off). If a new packet is received before the time-out a new 20ms time-out period
+  19           *  is started.
+  20           *
+  21           *  Please remember to turn off the RS232 switch on the receiver and transmitter boards. On the
+  22           *  nRF9E5 board turn off all dip-switches on the transmitter and turn on only the LED1 switch on
+  23           *  the receiver.
+  24           *
+  25           * COMPILER:
+  26           *  
+  27           *  This program has been tested with Keil C51 V7.09
+  28           *
+  29           * $Revision: 1 $
+  30           *
+  31           *==================================================================================================
+  32          */
+  33          // Comment out the following line for nRF24E1
+  34          #define NRF9E5 1
+  35          
+  36          
+  37          #ifdef NRF9E5
+  38          #include <Nordic\reg9e5.h>
+  39          #define POWER      3                // 0=min power...3 = max power
+  40          #define HFREQ      1                // 0=433MHz, 1=868/915MHz
+  41          #define CHANNEL  351                // Channel number: f(MHz) = (422.4+CHANNEL/10)*(1+HFREQ) 
+  42          #else
+              #include <nordic\reg24e1.h>
+              #endif
+  45          
+  46          #define TIMEOUT    20               // 20ms time-out on LED
+  47          #define ON          1
+  48          #define OFF         0
+  49          
+  50          static volatile unsigned char timer;
+  51          static volatile unsigned char t0lrel, t0hrel;
+  52          
+  53          #ifndef NRF9E5
+              
+              struct RFConfig
+C51 COMPILER V9.54   RANGEDEMO                                                             10/04/2015 16:25:20 PAGE 2   
+
+              {
+                  unsigned char n;
+                  unsigned char buf[15];
+              };
+              
+              typedef struct RFConfig RFConfig;
+              
+              #define ADDR_INDEX  8               // Index to address bytes in RFConfig.buf
+              #define ADDR_COUNT  4               // Number of address bytes
+              
+              const RFConfig tconf =
+              {
+                  15,
+                  0x08,                           // Payload size transmitter Rx #2 (not used in this example)
+                  0x08,                           // Payload size transmitter Rx #1 (not used in this example)
+                  0x00, 0x00, 0x00, 0x00, 0x00,   // Address of transmitter Rx #2 (not used in this example)
+                  0x00, 0x12, 0x34, 0x56, 0x78,   // Address of transmitter Rx #1 (not used in this example)
+                  0x81, 0x6f, 0x04
+              };
+              
+              const RFConfig rconf =
+              {
+                  15,
+                  0x08,                           // Payload size receiver Rx #2 (not used in this example)
+                  0x08,                           // Payload size receiver Rx #1
+                  0x00, 0x00, 0x00, 0x00, 0x00,   // Address receiver Rx #2 (not used in this example)
+                  0x00, 0x12, 0x34, 0x56, 0x78,   // Address receiver Rx #1 (four lower bytes used here)
+                  0x81, 0x6f, 0x05
+              };
+              
+              #endif
+  87          
+  88          void Delay100us(volatile unsigned char n)
+  89          {
+  90   1          unsigned char i;
+  91   1          while(n--)
+  92   1              for(i=0;i<35;i++)
+  93   1                  ;
+  94   1      }
+  95          
+  96          unsigned char SpiReadWrite(unsigned char b)
+  97          {
+  98   1          EXIF &= ~0x20;                  // Clear SPI interrupt
+  99   1          SPI_DATA = b;                   // Move byte to send to SPI data register
+ 100   1          while((EXIF & 0x20) == 0x00)    // Wait until SPI hs finished transmitting
+ 101   1              ;
+ 102   1          return SPI_DATA;
+ 103   1      }
+ 104          
+ 105          unsigned char ReceivePacket()
+ 106          {
+ 107   1          unsigned char b;
+ 108   1      
+ 109   1      #ifdef NRF9E5
+ 110   1          TRX_CE = 1;
+ 111   1          while(DR == 0)
+ 112   1              ;
+ 113   1          RACSN = 0;
+ 114   1          SpiReadWrite(RRP);
+ 115   1          b = SpiReadWrite(0);
+ 116   1          RACSN = 1;
+ 117   1          TRX_CE = 0;
+C51 COMPILER V9.54   RANGEDEMO                                                             10/04/2015 16:25:20 PAGE 3   
+
+ 118   1      #else
+                  CE = 1;
+                  while(DR1 == 0)
+                      ;
+                  b = SpiReadWrite(0);
+                  CE = 0;
+              #endif
+ 125   1          return b;
+ 126   1      }
+ 127          
+ 128          void TransmitPacket(unsigned char b)
+ 129          {
+ 130   1      #ifdef NRF9E5
+ 131   1          RACSN = 0;
+ 132   1          SpiReadWrite(WTP);
+ 133   1          SpiReadWrite(b);
+ 134   1          RACSN = 1;
+ 135   1          TRX_CE = 1;
+ 136   1          Delay100us(1);
+ 137   1          TRX_CE = 0;
+ 138   1          while(DR == 0)
+ 139   1              ;
+ 140   1      #else
+                  unsigned char i;
+              
+                  CE = 1;
+                  Delay100us(0);
+                  // All packets start with the receiver address:
+                  for(i=0;i<ADDR_COUNT;i++)
+                      SpiReadWrite(rconf.buf[ADDR_INDEX+i]);
+                  SpiReadWrite(b);
+                  CE = 0;
+                  Delay100us(3);                  // Wait ~300us
+              #endif
+ 152   1      }
+ 153          
+ 154          void Led(unsigned char on)
+ 155          {
+ 156   1          if (on)
+ 157   1          {
+ 158   2              P0 &= ~0x01;
+ 159   2              timer = 0;  
+ 160   2              TR0 = 1;                    // Start Timer0
+ 161   2          } else
+ 162   1              P0 |= 0x01;
+ 163   1      }
+ 164          
+ 165          void InitTimer(void)
+ 166          {
+ 167   1          TR0 = 0;
+ 168   1          TMOD &= ~0x03;
+ 169   1          TMOD |= 0x01;                   // mode 1
+ 170   1          CKCON |= 0x08;                  // T0M = 1 (/4 timer clock)
+ 171   1          t0lrel = 0x60;                  // 1KHz tick...
+ 172   1          t0hrel = 0xF0;                  // ... = 65536-16e6/(4*1e3) = F060h
+ 173   1          TF0 = 0;                        // Clear any pending Timer0 interrupts
+ 174   1          ET0 = 1;                        // Enable Timer0 interrupt
+ 175   1      }
+ 176          
+ 177          void Timer0ISR (void) interrupt 1
+ 178          {
+ 179   1          TF0 = 0;                        // Clear Timer0 interrupt
+C51 COMPILER V9.54   RANGEDEMO                                                             10/04/2015 16:25:20 PAGE 4   
+
+ 180   1          TH0 = t0hrel;                   // Reload Timer0 high byte
+ 181   1          TL0 = t0lrel;                   // Reload Timer0 low byte
+ 182   1          timer++;
+ 183   1          if (timer == TIMEOUT)
+ 184   1          {
+ 185   2              P0 |= 0x01;                 // Led off
+ 186   2              TR0 = 0;                    // Stop timer
+ 187   2          }
+ 188   1      }
+ 189          
+ 190          void Receiver(void)
+ 191          {
+ 192   1          unsigned char b, bo, err;
+ 193   1      
+ 194   1      #ifdef NRF9E5
+ 195   1          TXEN = 0;
+ 196   1      #else
+                  CS = 1;
+                  Delay100us(0);
+                  for(b=0;b<rconf.n;b++)
+                  {
+                      SpiReadWrite(rconf.buf[b]);
+                  }
+                  CS = 0;
+              #endif
+ 205   1          bo = err = 0;
+ 206   1          for(;;)
+ 207   1          {
+ 208   2              b = ReceivePacket();
+ 209   2              Led(ON);
+ 210   2          }
+ 211   1      }
+ 212          
+ 213          void Transmitter(void)
+ 214          {
+ 215   1          unsigned char b;
+ 216   1          
+ 217   1      #ifdef NRF9E5
+ 218   1          TXEN = 1;
+ 219   1      #else
+                  CS = 1;
+                  Delay100us(0);
+                  for(b=0;b<tconf.n;b++)
+                  {
+                      SpiReadWrite(tconf.buf[b]);
+                  }
+                  CS = 0;
+              #endif
+ 228   1          b = 0;
+ 229   1          for(;;)
+ 230   1          {
+ 231   2              TransmitPacket(b++);        // Transmit data
+ 232   2          }
+ 233   1      }
+ 234          
+ 235          void Init(void)
+ 236          {
+ 237   1          unsigned char tmp;
+ 238   1      
+ 239   1          P0_DIR = 0x20;                  // P0.5 is input, the rest output
+ 240   1          P0 = 0x89;                      // P0.3 = 1 and P0.6=0 for the rec/tran selection
+ 241   1                                          // LED off
+C51 COMPILER V9.54   RANGEDEMO                                                             10/04/2015 16:25:20 PAGE 5   
+
+ 242   1          SPICLK = 1;
+ 243   1          SPI_CTRL = 0x02;                // Connect internal SPI controller to Radio
+ 244   1      
+ 245   1      #ifdef NRF9E5
+ 246   1          // Switch to 16MHz clock:
+ 247   1          RACSN = 0;
+ 248   1          SpiReadWrite(RRC | 0x09);
+ 249   1          tmp = SpiReadWrite(0) | 0x04;
+ 250   1          RACSN = 1;
+ 251   1      
+ 252   1          RACSN = 0;
+ 253   1          SpiReadWrite(WRC | 0x09);
+ 254   1          SpiReadWrite(tmp);
+ 255   1          RACSN = 1;
+ 256   1      
+ 257   1          // Configure Radio:
+ 258   1          RACSN = 0;
+ 259   1          SpiReadWrite(WRC | 0x03);       // Write to RF config address 3 (RX payload)
+ 260   1          SpiReadWrite(0x01);             // One byte RX payload
+ 261   1          SpiReadWrite(0x01);             // One byte TX payload
+ 262   1          RACSN = 1;
+ 263   1      
+ 264   1          RACSN = 0;
+ 265   1          SpiReadWrite(RRC | 0x01);       // Read RF config address 1
+ 266   1          tmp = SpiReadWrite(0) & 0xf0;   // Clear the power and frequency setting bits
+ 267   1          RACSN = 1;
+ 268   1      
+ 269   1          RACSN = 0;
+ 270   1          SpiReadWrite(WRC);              // Write RF config address 0
+ 271   1          SpiReadWrite(CHANNEL & 0xff);   // CHANNEL bit7..0
+ 272   1          // Change power defined by POWER above, to 433 or 868/915MHz defined by HFREQ and
+ 273   1          // bit8 of CHANNEL:
+ 274   1          SpiReadWrite(tmp | (POWER<<2) | (HFREQ << 1) | ((CHANNEL >> 8) & 0x01));
+ 275   1          RACSN = 1;
+ 276   1      #else
+                  PWR_UP = 1;                     // Turn on Radio on 24E1
+                  Delay100us(30);                 // Wait > 3ms
+              #endif
+ 280   1      
+ 281   1          InitTimer();
+ 282   1          EA = 1;
+ 283   1      }
+ 284          
+ 285          void main(void)
+ 286          {
+ 287   1          Init();
+ 288   1          if(P0 & 0x20)
+ 289   1          {
+ 290   2              Receiver();
+ 291   2          }
+ 292   1          else
+ 293   1          {
+ 294   2              Transmitter();
+ 295   2          }
+ 296   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    296    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+C51 COMPILER V9.54   RANGEDEMO                                                             10/04/2015 16:25:20 PAGE 6   
+
+   DATA SIZE        =      3       4
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
