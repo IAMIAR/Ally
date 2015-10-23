@@ -1,0 +1,178 @@
+C51 COMPILER V9.54   TX433                                                                 10/17/2015 22:33:35 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE TX433
+OBJECT MODULE PLACED IN tx433.OBJ
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE tx433.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND TABS(2)
+
+line level    source
+
+   1          /*******************************************  
+   2          ???????????:  
+   3                  ????????????PC???  
+   4            
+   5          ??:?????????????????????????????????  
+   6          ******************************************/   
+   7             
+   8          #include <Nordic\reg9e5.h>   
+   9             
+  10          #define   HFREQ 0                     // 0=433MHz, 1=868/915MHz     (????)   
+  11          #define   UART_BUFFER_SIZE    10       //????????? 10 bytes   
+  12             
+  13          unsigned char UART_BUFFER[UART_BUFFER_SIZE+1];   
+  14             
+  15             
+  16          //????1Byte   
+  17          void PutChar(char c)   
+  18          {   
+  19   1          while(!TI)                      //Wait until finished seri-port transmitting   
+  20   1              ;   
+  21   1          TI = 0;                        //Clear interrupt flag   
+  22   1          SBUF = c;                      //sending a byte   
+  23   1      }   
+  24             
+  25          //???????   
+  26          void PutString(const char *s,unsigned char strlen)   
+  27          {   
+  28   1          unsigned char k;   
+  29   1          //EIE &= 0xF0;   
+  30   1          for(k=1;k<=strlen;k++)   
+  31   1             {   
+  32   2               PutChar(*(s+k));   
+  33   2             }   
+  34   1          //EIE |= 0x0F;   
+  35   1      }   
+  36             
+  37             
+  38          unsigned char SpiReadWrite(unsigned char b)   
+  39          {   
+  40   1          EXIF &= ~0x20;                  // Clear SPI interrupt        (EXIP.5=0)   
+  41   1          SPI_DATA = b;                   // Move byte to send to SPI data register   
+  42   1          while((EXIF & 0x20) == 0x00)    // Wait until SPI hs finished transmitting   (??EXIF.5???)   
+  43   1                ;   
+  44   1          return SPI_DATA;   
+  45   1      }   
+  46             
+  47             
+  48          void Receiver(void)   
+  49          {   
+  50   1          unsigned char i=0;   
+  51   1          TXEN = 0;   
+  52   1          TRX_CE = 1;                     //??????   
+  53   1          while(DR == 0)                  //DR=0????????,??   
+  54   1              ;   
+  55   1         
+C51 COMPILER V9.54   TX433                                                                 10/17/2015 22:33:35 PAGE 2   
+
+  56   1          TRX_CE=0;                       //??????????SPI   
+  57   1          RACSN = 0;                      //??SPI??????(1?0???)   
+  58   1          SpiReadWrite(RRP);     
+  59   1      /*  
+  60   1      while(DR == 1)  
+  61   1      {   UART_BUFFER[i] = SpiReadWrite(0);   
+  62   1          i++;  
+  63   1      }  
+  64   1      */                     
+  65   1          UART_BUFFER[0] = SpiReadWrite(0);    
+  66   1          for(i=1;i<=UART_BUFFER[0];i++)   //****???*****   
+  67   1          {   
+  68   2              UART_BUFFER[i] = SpiReadWrite(0);           
+  69   2          }   
+  70   1          P04 = ~P04;   
+  71   1          RACSN = 1;   
+  72   1      //    TRX_CE = 1;                     //??MCU??SPI???   
+  73   1      }   
+  74             
+  75          void UART_Init(void)                //nRF9E5?????   
+  76          {   
+  77   1          TH1 = 0xE6;                      // 9600@16MHz (when T1M=1 and SMOD=1)   
+  78   1          CKCON |= 0x30;                  // T1M=1 (/4 timer clock)   
+  79   1          PCON = 0x80;                    // SMOD=1 (double baud rate)   
+  80   1          SCON = 0x52;                    // Serial mode1, enable receiver   
+  81   1          TMOD = 0x20;                    // Timer1 8bit auto reload    
+  82   1          TR1 = 1;                        // Start timer1     
+  83   1          P0_ALT |= 0x06;   
+  84   1          P0_DIR  = 0xA2;                 // P0.1 (RxD) is input   
+  85   1      }   
+  86             
+  87          void Init(void)                     //nRF9E5???????   
+  88          {   
+  89   1          unsigned char tmp,cklf;   
+  90   1          SPICLK = 0;                     // Max SPI clock   
+  91   1          SPI_CTRL = 0x02;                // Connect internal SPI controller to Radio   
+  92   1         
+  93   1          // Configure Radio:   
+  94   1          RACSN = 0;   
+  95   1          SpiReadWrite(WRC | 0x03);       // Write to RF config address 3 (RX payload)   
+  96   1          SpiReadWrite(0x01);             // One byte RX payload   
+  97   1          SpiReadWrite(0x01);             // One byte TX payload   
+  98   1          RACSN = 1;   
+  99   1         
+ 100   1          RACSN = 0;   
+ 101   1          SpiReadWrite(RRC | 0x01);       // Read RF config address 1   
+ 102   1          tmp = SpiReadWrite(0) & 0xf1;   // Clear the power and frequency setting bits     
+ 103   1                                          //PA_PWR[1:0]=00(????-10dBm)Bit1:HFREQ_PLL=0(433MHz)   
+ 104   1          RACSN = 1;   
+ 105   1         
+ 106   1          RACSN = 0;   
+ 107   1          SpiReadWrite(WRC | 0x01);           // Write RF config address 1   
+ 108   1          SpiReadWrite(tmp | (HFREQ << 1));   // Change to 433 or 868/915MHz defined by HFREQ above:   
+ 109   1          RACSN = 1;   
+ 110   1         
+ 111   1         
+ 112   1          // ???????16MHz:   
+ 113   1          RACSN = 0;   
+ 114   1          SpiReadWrite(RRC | 0x09);   
+ 115   1          cklf = SpiReadWrite(0) | 0x1c;   
+ 116   1          RACSN = 1;   
+ 117   1          RACSN = 0;   
+C51 COMPILER V9.54   TX433                                                                 10/17/2015 22:33:35 PAGE 3   
+
+ 118   1          SpiReadWrite(WRC | 0x09);   
+ 119   1          SpiReadWrite(cklf);   
+ 120   1          RACSN = 1;   
+ 121   1         
+ 122   1         
+ 123   1          RACSN = 0;   
+ 124   1          SpiReadWrite(WRC | 0x05);       //????????????,?tx433??????????   
+ 125   1          SpiReadWrite(0x18);   
+ 126   1          SpiReadWrite(0x32);   
+ 127   1          SpiReadWrite(0x40);   
+ 128   1          SpiReadWrite(0xAF);   
+ 129   1          RACSN = 1;   
+ 130   1         
+ 131   1          RACSN = 0;   
+ 132   1          SpiReadWrite(WRC | 0x03);       //??????????????,?tx433??????????   
+ 133   1          SpiReadWrite(0x20);             //???????32???   
+ 134   1          RACSN = 1;   
+ 135   1         
+ 136   1         
+ 137   1      }   
+ 138             
+ 139          void main(void)   
+ 140          {   
+ 141   1          Init();   
+ 142   1          UART_Init();   
+ 143   1      //    EA=1;   
+ 144   1      //    ES=1;   
+ 145   1         
+ 146   1          while(1)   
+ 147   1           {    
+ 148   2            Receiver();   
+ 149   2            PutString(UART_BUFFER,UART_BUFFER[0]);   
+ 150   2           }   
+ 151   1      } 
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    277    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     11       3
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

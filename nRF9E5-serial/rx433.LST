@@ -1,0 +1,321 @@
+C51 COMPILER V9.54   RX433                                                                 10/22/2015 23:48:36 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE RX433
+OBJECT MODULE PLACED IN rx433.OBJ
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE rx433.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND TABS(2)
+
+line level    source
+
+   1          /*******************************************
+   2          双机无线收发接收端程序：
+   3                  将无线接收到的字符显示在PC串口。
+   4          
+   5          修改：将接收的数据个数由原先的缓冲区大小判断改成由接收到第一个字节判断。
+   6          ******************************************/
+   7          
+   8          #include <Nordic\reg9e5.h>
+   9          
+  10          #define   HFREQ 0                     // 0=433MHz, 1=868/915MHz     (方便更改）
+  11          #define   UART_BUFFER_SIZE    10       //定义串口缓冲区大小 10 bytes
+  12          
+  13          unsigned char UART_BUFFER[UART_BUFFER_SIZE+1];
+  14          
+  15          char echo[6]="ATE1\r\n";
+  16          char mode[11]="AT+CMGF=1\r\n";
+  17          char recp[24]="AT+CMGS=\"+12014233865\"\r\n";
+  18          char message[11]="HelloWorld\n";
+  19          
+  20          //串口发送1Byte
+  21          void PutChar(char c)
+  22          {
+  23   1          while(!TI)                  //Wait until finished seri-port transmitting
+  24   1              ;
+  25   1        TI = 0;                    //Clear interrupt flag
+  26   1          SBUF = c;                //sending a byte
+  27   1      }
+  28          
+  29          //串口发送字符串
+  30          void PutString(const char *s,unsigned char strlen)
+  31          {
+  32   1          unsigned char k;
+  33   1        //EIE &= 0xF0;
+  34   1          for(k=1;k<=strlen;k++)
+  35   1             {
+  36   2               PutChar(*(s+k));
+  37   2             }
+  38   1        //EIE |= 0x0F;
+  39   1      }
+  40          /*void PutString(const char *s)
+  41          {
+  42              while(*s != '\n')
+  43                  PutChar(*s++);
+  44          }*/
+  45          
+  46          
+  47          unsigned char SpiReadWrite(unsigned char b)
+  48          {
+  49   1          EXIF &= ~0x20;                  // Clear SPI interrupt        (EXIP.5=0)
+  50   1          SPI_DATA = b;                   // Move byte to send to SPI data register
+  51   1          while((EXIF & 0x20) == 0x00)    // Wait until SPI hs finished transmitting   (测试EXIF.5的状态)
+  52   1                ;
+  53   1          return SPI_DATA;
+  54   1      }
+  55          
+C51 COMPILER V9.54   RX433                                                                 10/22/2015 23:48:36 PAGE 2   
+
+  56          
+  57          void Receiver(void)
+  58          {
+  59   1          unsigned char i=0;
+  60   1          TXEN = 0;
+  61   1          TRX_CE = 1;                     //进入接收模式
+  62   1          while(DR == 0)                  //DR=0表示数据未准备好，等待
+  63   1              ;
+  64   1      
+  65   1          TRX_CE=0;                       //进入待机模式才可读写SPI
+  66   1          RACSN = 0;                      //内部SPI开始等待命令（1到0的跳变）
+  67   1          SpiReadWrite(RRP);  
+  68   1      /*
+  69   1      while(DR == 1)
+  70   1      {   UART_BUFFER[i] = SpiReadWrite(0); 
+  71   1          i++;
+  72   1      }
+  73   1      */                
+  74   1        UART_BUFFER[0] = SpiReadWrite(0); 
+  75   1        for(i=1;i<=UART_BUFFER[0];i++)   //****修改处*****
+  76   1        {
+  77   2          UART_BUFFER[i] = SpiReadWrite(0);      
+  78   2        }
+  79   1        P04 = ~P04;
+  80   1          RACSN = 1;
+  81   1      //    TRX_CE = 1;                     //这时MCU才从SPI读数据
+  82   1      }
+  83          
+  84          void UART_Init(void)                //nRF9E5串口初始化
+  85          {
+  86   1          TH1 = 0xE6;                      // 9600@16MHz (when T1M=1 and SMOD=1)
+  87   1          CKCON |= 0x30;                  // T1M=1 (/4 timer clock)
+  88   1          PCON = 0x80;                    // SMOD=1 (double baud rate)
+  89   1          SCON = 0x52;                    // Serial mode1, enable receiver
+  90   1          TMOD = 0x20;                    // Timer1 8bit auto reload 
+  91   1          TR1 = 1;                        // Start timer1  
+  92   1          TI = 1;
+  93   1          P0_ALT |= 0x06;
+  94   1          P0_DIR  = 0xA2;                // P0.1 (RxD) is input*/
+  95   1      }
+  96          
+  97          void Init(void)                     //nRF9E5无线模块初始化
+  98          {
+  99   1          unsigned char tmp,cklf;
+ 100   1          SPICLK = 0;                     // Max SPI clock
+ 101   1          SPI_CTRL = 0x02;                // Connect internal SPI controller to Radio
+ 102   1      
+ 103   1          // Configure Radio:
+ 104   1          RACSN = 0;
+ 105   1          SpiReadWrite(WRC | 0x03);       // Write to RF config address 3 (RX payload)
+ 106   1          SpiReadWrite(0x01);             // One byte RX payload
+ 107   1          SpiReadWrite(0x01);             // One byte TX payload
+ 108   1          RACSN = 1;
+ 109   1      
+ 110   1          RACSN = 0;
+ 111   1          SpiReadWrite(RRC | 0x01);       // Read RF config address 1
+ 112   1          tmp = SpiReadWrite(0) & 0xf1;   // Clear the power and frequency setting bits  
+ 113   1                                          //PA_PWR[1:0]=00(输出电源-10dBm）Bit1：HFREQ_PLL=0（433MHz)
+ 114   1          RACSN = 1;
+ 115   1      
+ 116   1          RACSN = 0;
+ 117   1          SpiReadWrite(WRC | 0x01);           // Write RF config address 1
+C51 COMPILER V9.54   RX433                                                                 10/22/2015 23:48:36 PAGE 3   
+
+ 118   1          SpiReadWrite(tmp | (HFREQ << 1));   // Change to 433 or 868/915MHz defined by HFREQ above:
+ 119   1          RACSN = 1;
+ 120   1      
+ 121   1      
+ 122   1          // 将时钟频率改为16MHz:
+ 123   1          RACSN = 0;
+ 124   1          SpiReadWrite(RRC | 0x09);
+ 125   1          cklf = SpiReadWrite(0) | 0x1c;
+ 126   1          RACSN = 1;
+ 127   1          RACSN = 0;
+ 128   1          SpiReadWrite(WRC | 0x09);
+ 129   1          SpiReadWrite(cklf);
+ 130   1          RACSN = 1;
+ 131   1      
+ 132   1      
+ 133   1          RACSN = 0;
+ 134   1          SpiReadWrite(WRC | 0x05);       //设置本接收器可接受的地址,与tx433里的配置一样才可通信
+ 135   1          SpiReadWrite(0x18);
+ 136   1          SpiReadWrite(0x32);
+ 137   1          SpiReadWrite(0x40);
+ 138   1          SpiReadWrite(0xAF);
+ 139   1          RACSN = 1;
+ 140   1      
+ 141   1          RACSN = 0;
+ 142   1          SpiReadWrite(WRC | 0x03);       //设置本接收器可接受的数据宽度,与tx433里的配置一样才可通信
+ 143   1          SpiReadWrite(0x20);             //接受数据宽度为32个字节
+ 144   1          RACSN = 1;
+ 145   1      
+ 146   1      
+ 147   1      }
+ 148          
+ 149          
+ 150          void Delay(volatile unsigned char n)
+ 151          {
+ 152   1          unsigned char i;
+ 153   1          while(n--)
+ 154   1              for(i=0;i<100;i++)
+ 155   1                  ;
+ 156   1      }
+ 157          
+ 158          void main(void)
+ 159          {
+ 160   1          Init();
+ 161   1          UART_Init();   
+ 162   1      
+ 163   1            //Receiver();
+ 164   1             PutChar('A');  // AT command to send SMS message
+ 165   1             Delay(100);
+ 166   1             PutChar('T');  // AT command to send SMS message
+ 167   1             Delay(100);
+ 168   1             PutChar('\r');   // AT command to send SMS message
+ 169   1             Delay(100);
+ 170   1             PutChar('\n');   // AT command to send SMS message
+ 171   1             Delay(100);
+ 172   1             
+ 173   1             PutChar(echo[0]);  // AT command to send SMS message
+ 174   1             Delay(100);
+ 175   1             PutChar(echo[1]);  // AT command to send SMS message
+ 176   1             Delay(100);
+ 177   1             PutChar(echo[2]);  // AT command to send SMS message
+ 178   1             Delay(100);
+ 179   1             PutChar(echo[3]);
+C51 COMPILER V9.54   RX433                                                                 10/22/2015 23:48:36 PAGE 4   
+
+ 180   1             Delay(100);
+ 181   1             PutChar(echo[4]);  // AT command to send SMS message
+ 182   1             Delay(100);
+ 183   1             PutChar(echo[5]);  // AT command to send SMS message
+ 184   1             Delay(100);
+ 185   1             
+ 186   1             PutChar(mode[0]);  // AT command to send SMS message
+ 187   1             Delay(100);
+ 188   1             PutChar(mode[1]);  // AT command to send SMS message
+ 189   1             Delay(100);
+ 190   1             PutChar(mode[2]);  // AT command to send SMS message
+ 191   1             Delay(100);
+ 192   1             PutChar(mode[3]);
+ 193   1             Delay(100);
+ 194   1             PutChar(mode[4]);  // AT command to send SMS message
+ 195   1             Delay(100);
+ 196   1             PutChar(mode[5]);  // AT command to send SMS message
+ 197   1             Delay(100);
+ 198   1             PutChar(mode[6]);  // AT command to send SMS message
+ 199   1             Delay(100);
+ 200   1             PutChar(mode[7]);
+ 201   1             Delay(100);
+ 202   1             PutChar(mode[8]);  // AT command to send SMS message
+ 203   1             Delay(100);
+ 204   1             PutChar(mode[9]);  // AT command to send SMS message
+ 205   1             Delay(100);
+ 206   1             PutChar(mode[10]); // AT command to send SMS message
+ 207   1             Delay(100);
+ 208   1      
+ 209   1             PutChar(recp[0]);  // AT command to send SMS message
+ 210   1             Delay(100);
+ 211   1             PutChar(recp[1]);  // AT command to send SMS message
+ 212   1             Delay(100);
+ 213   1             PutChar(recp[2]);  // AT command to send SMS message
+ 214   1             Delay(100);
+ 215   1             PutChar(recp[3]);
+ 216   1             Delay(100);
+ 217   1             PutChar(recp[4]);  // AT command to send SMS message
+ 218   1             Delay(100);
+ 219   1             PutChar(recp[5]);  // AT command to send SMS message
+ 220   1             Delay(100);
+ 221   1             PutChar(recp[6]);  // AT command to send SMS message
+ 222   1             Delay(100);
+ 223   1             PutChar(recp[7]);
+ 224   1             Delay(100);
+ 225   1             PutChar(recp[8]);  // AT command to send SMS message
+ 226   1             Delay(100);
+ 227   1             PutChar(recp[9]);  // AT command to send SMS message
+ 228   1             Delay(100);
+ 229   1             PutChar(recp[10]); // AT command to send SMS message
+ 230   1             Delay(100);
+ 231   1             PutChar(recp[11]);   // AT command to send SMS message
+ 232   1             Delay(100);
+ 233   1             PutChar(recp[12]);   // AT command to send SMS message
+ 234   1             Delay(100);
+ 235   1             PutChar(recp[13]);
+ 236   1             Delay(100);
+ 237   1             PutChar(recp[14]);   // AT command to send SMS message
+ 238   1             Delay(100);
+ 239   1             PutChar(recp[15]);   // AT command to send SMS message
+ 240   1             Delay(100);
+ 241   1             PutChar(recp[16]);   // AT command to send SMS message
+C51 COMPILER V9.54   RX433                                                                 10/22/2015 23:48:36 PAGE 5   
+
+ 242   1             Delay(100);
+ 243   1             PutChar(recp[17]);
+ 244   1             Delay(100);
+ 245   1             PutChar(recp[18]);   // AT command to send SMS message
+ 246   1             Delay(100);
+ 247   1             PutChar(recp[19]);   // AT command to send SMS message
+ 248   1             Delay(100);
+ 249   1             PutChar(recp[20]); // AT command to send SMS message
+ 250   1             Delay(100);
+ 251   1             PutChar(recp[21]);   // AT command to send SMS message
+ 252   1             Delay(100);
+ 253   1             PutChar(recp[22]);   // AT command to send SMS message
+ 254   1             Delay(100);
+ 255   1             PutChar(recp[23]); // AT command to send SMS message
+ 256   1             Delay(100);
+ 257   1             
+ 258   1             PutChar(message[0]);   // AT command to send SMS message
+ 259   1             Delay(100);
+ 260   1             PutChar(message[1]);   // AT command to send SMS message
+ 261   1             Delay(100);
+ 262   1             PutChar(message[2]);   // AT command to send SMS message
+ 263   1             Delay(100);
+ 264   1             PutChar(message[3]);
+ 265   1             Delay(100);
+ 266   1             PutChar(message[4]);   // AT command to send SMS message
+ 267   1             Delay(100);
+ 268   1             PutChar(message[5]);   // AT command to send SMS message
+ 269   1             Delay(100);
+ 270   1             PutChar(message[6]);   // AT command to send SMS message
+ 271   1             Delay(100);
+ 272   1             PutChar(message[7]);
+ 273   1             Delay(100);
+ 274   1             PutChar(message[8]);   // AT command to send SMS message
+ 275   1             Delay(100);
+ 276   1             PutChar(message[9]);   // AT command to send SMS message
+ 277   1             Delay(100);
+ 278   1             PutChar(message[10]); // AT command to send SMS message
+ 279   1             Delay(100);
+ 280   1      
+ 281   1             PutChar((char)26);
+ 282   1             Delay(100);
+ 283   1             PutChar('\n');
+ 284   1             Delay(100);
+ 285   1             PutChar('\r');
+ 286   1             Delay(100);
+ 287   1             PutChar('\n');
+ 288   1             Delay(100);
+ 289   1            
+ 290   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    592    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     63       4
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
